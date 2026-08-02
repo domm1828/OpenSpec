@@ -29,6 +29,39 @@ export interface ParsedTask {
   description: string;
 }
 
+export interface LocatedTask extends ParsedTask {
+  /** 0-based index of the line within the file the content came from. */
+  lineIndex: number;
+  /** The line verbatim, so a writer can toggle the box without reformatting. */
+  raw: string;
+}
+
+/**
+ * Like {@link parseTaskLines}, but keeps each task's line index and raw text.
+ *
+ * Positions are what let a writer flip a single checkbox in place instead of
+ * regenerating the file: the integrations layer syncs task state with external
+ * trackers, and rewriting a whole tasks.md to change one box would clobber
+ * whatever the agent wrote around it.
+ */
+export function parseTaskLinesWithPositions(content: string): LocatedTask[] {
+  const tasks: LocatedTask[] = [];
+
+  content.split('\n').forEach((line, lineIndex) => {
+    const match = line.match(TASK_LINE_PATTERN);
+    if (match) {
+      tasks.push({
+        done: match[1].toLowerCase() === 'x',
+        description: match[2].trim(),
+        lineIndex,
+        raw: line,
+      });
+    }
+  });
+
+  return tasks;
+}
+
 /**
  * Parses every task line in a tasks file, in document order.
  *
