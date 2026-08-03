@@ -24,7 +24,18 @@ export type OpenSpecEventType =
   | 'change.validated'
   | 'task.checked'
   | 'task.unchecked'
-  | 'spec.updated';
+  | 'spec.updated'
+  /**
+   * Version-control facts, emitted by an adapter rather than derived from disk.
+   *
+   * The watcher cannot produce these: a branch and a pull request are things an
+   * adapter *did*, not things it observed in `openspec/`. They exist so one
+   * adapter can tell the others what it did without either of them importing the
+   * other — the Trello card learns its pull request URL this way.
+   */
+  | 'vcs.branch.created'
+  | 'vcs.commit.created'
+  | 'vcs.pr.opened';
 
 export const ALL_EVENT_TYPES: readonly OpenSpecEventType[] = [
   'change.created',
@@ -34,6 +45,9 @@ export const ALL_EVENT_TYPES: readonly OpenSpecEventType[] = [
   'task.checked',
   'task.unchecked',
   'spec.updated',
+  'vcs.branch.created',
+  'vcs.commit.created',
+  'vcs.pr.opened',
 ] as const;
 
 export interface OpenSpecEvent {
@@ -110,6 +124,18 @@ export interface IntegrationContext {
   log: (message: string) => void;
   /** Current time as ISO-8601. Injected so tests are deterministic. */
   now: () => string;
+  /**
+   * Announces something this adapter just did to every *other* adapter.
+   *
+   * The alternative was for the Trello adapter to import the GitHub one and ask
+   * it for the pull request URL, which couples two integrations that are meant
+   * to be independently removable. Here GitHub states a fact and whoever cares
+   * reacts — the same shape as every other event in the layer.
+   *
+   * The emitter never receives its own event, and an emitted event cannot emit
+   * another: two adapters answering each other would otherwise loop forever.
+   */
+  emit?: (event: OpenSpecEvent) => Promise<void>;
 }
 
 /**
@@ -141,6 +167,19 @@ export interface IntegrationAdapter {
   start?(): Promise<void>;
   /** OpenSpec → outside. */
   onEvent?(event: OpenSpecEvent): Promise<void>;
+  /**
+   * Ends a watch pass: whatever the events of this pass added up to, do it now.
+   *
+   * `onEvent` sees one event at a time, so an adapter that wants to act on a
+   * *pass* rather than on each event has nowhere to do it. The GitHub adapter is
+   * the reason this exists: ticking three checkboxes in one edit produces three
+   * `task.checked` events for one working tree, and committing per event would
+   * put the whole diff in the first commit and leave the other two empty.
+   *
+   * Called once per pass, after every event has been dispatched and before the
+   * snapshot is written.
+   */
+  flush?(): Promise<void>;
   /** Outside → OpenSpec. */
   pull?(): Promise<InboundChange[]>;
   healthcheck(): Promise<HealthReport>;

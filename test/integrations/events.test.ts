@@ -153,4 +153,35 @@ describe('describeEvent', () => {
     expect(line.length).toBeLessThan(200);
     expect(line.endsWith('…')).toBe(true);
   });
+
+  it('renders the version-control events from their meta', () => {
+    expect(
+      describeEvent({
+        type: 'vcs.branch.created',
+        changeId: 'add-auth',
+        meta: { branch: 'feature/add-auth' },
+        at: NOW,
+      })
+    ).toBe('Branch created for add-auth: feature/add-auth');
+
+    expect(
+      describeEvent({
+        type: 'vcs.pr.opened',
+        changeId: 'add-auth',
+        meta: { url: 'https://github.com/o/r/pull/7', number: 7 },
+        at: NOW,
+      })
+    ).toBe('Pull request for add-auth: https://github.com/o/r/pull/7');
+  });
+
+  it('says something sensible when meta is missing or the wrong shape', () => {
+    // `meta` is free-form and adapters must tolerate unknown keys, so the
+    // renderer cannot assume the emitter filled it in.
+    expect(describeEvent({ type: 'vcs.branch.created', changeId: 'a', at: NOW })).toContain(
+      'unknown branch'
+    );
+    expect(
+      describeEvent({ type: 'vcs.commit.created', changeId: 'a', meta: { subject: 42 }, at: NOW })
+    ).toContain('no subject');
+  });
 });

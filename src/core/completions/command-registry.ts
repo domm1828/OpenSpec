@@ -917,4 +917,70 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
       },
     ],
   },
+  {
+    name: 'github',
+    description: 'Branch, commit and open pull requests as changes progress',
+    flags: [],
+    subcommands: [
+      {
+        name: 'link',
+        description: 'Declare the git flow branches and write them into openspec/integrations.yaml',
+        flags: [
+          {
+            name: 'repo',
+            description: 'Repository, when it cannot be read from the remote',
+            takesValue: true,
+          },
+          {
+            name: 'main',
+            description: 'Principal branch (defaults to the repository default)',
+            takesValue: true,
+          },
+          {
+            name: 'develop',
+            description: 'Development branch (the base every PR targets)',
+            takesValue: true,
+          },
+          {
+            name: 'create-develop',
+            description: 'Create the development branch from main if it is missing',
+          },
+          COMMON_FLAGS.json,
+        ],
+      },
+      {
+        name: 'start',
+        description: 'Create and check out the feature branch for a change',
+        acceptsPositional: true,
+        positionals: [{ name: 'changeId' }],
+        flags: [
+          {
+            name: 'from',
+            description: 'Start point, when it should not be the development branch',
+            takesValue: true,
+          },
+          COMMON_FLAGS.json,
+        ],
+      },
+      {
+        name: 'pr',
+        description: 'Open or refresh the pull request for a change',
+        acceptsPositional: true,
+        positionals: [{ name: 'changeId' }],
+        flags: [
+          { name: 'draft', description: 'Open it as a draft' },
+          {
+            name: 'dry-run',
+            description: 'Show what would be opened, without pushing or writing',
+          },
+          COMMON_FLAGS.json,
+        ],
+      },
+      {
+        name: 'status',
+        description: 'Check the GitHub connection, the repository and the branches',
+        flags: [COMMON_FLAGS.json],
+      },
+    ],
+  },
 ];

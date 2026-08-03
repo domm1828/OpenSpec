@@ -106,7 +106,19 @@ export function describeEvent(event: OpenSpecEvent): string {
       return `Task reopened in ${change}${progress}: ${describeTask(event.task)}`;
     case 'spec.updated':
       return `Spec updated: ${change}`;
+    case 'vcs.branch.created':
+      return `Branch created for ${change}: ${metaString(event, 'branch') ?? '(unknown branch)'}`;
+    case 'vcs.commit.created':
+      return `Committed in ${change}${progress}: ${metaString(event, 'subject') ?? '(no subject)'}`;
+    case 'vcs.pr.opened':
+      return `Pull request for ${change}: ${metaString(event, 'url') ?? '(no url)'}`;
   }
+}
+
+/** Reads one string out of an event's free-form `meta`, tolerating anything else. */
+function metaString(event: OpenSpecEvent, key: string): string | undefined {
+  const value = event.meta?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function describeTask(task: TaskRef | undefined): string {

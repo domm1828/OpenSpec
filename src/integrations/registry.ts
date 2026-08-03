@@ -62,6 +62,8 @@ function configFor(config: IntegrationsConfig, id: string): { enabled: boolean; 
       return { enabled: config.telegram.enabled, value: config.telegram };
     case 'trello':
       return { enabled: config.trello.enabled, value: config.trello };
+    case 'github':
+      return { enabled: config.github.enabled, value: config.github };
     default:
       return { enabled: false, value: undefined };
   }
@@ -85,6 +87,7 @@ export async function loadAdapters(options: LoadAdaptersOptions): Promise<Loaded
   } = options;
 
   const loaded: LoadedAdapter[] = [];
+  let emitting = false;
 
   for (const id of registeredAdapterIds()) {
     if (only && !only.includes(id)) continue;
@@ -95,7 +98,37 @@ export async function loadAdapters(options: LoadAdaptersOptions): Promise<Loaded
     const factory = factories.get(id);
     if (!factory) continue;
 
-    const context: IntegrationContext = { projectRoot, config: value, log, now };
+    const context: IntegrationContext = {
+      projectRoot,
+      config: value,
+      log,
+      now,
+      // Closes over `loaded`, which is still being filled: by the time any
+      // adapter can emit anything, the array holds every adapter. Reading it
+      // eagerly here would hand the first adapter an empty audience.
+      emit: async (event) => {
+        // Depth 1. Without this, two adapters that each react to the other's
+        // announcement recurse until the stack gives out, and the failure looks
+        // like a hang rather than a misconfiguration.
+        if (emitting) {
+          log(`${id} tried to emit ${event.type} from inside another emit; ignored`);
+          return;
+        }
+
+        emitting = true;
+        try {
+          const failures = await dispatchEvent(
+            loaded.filter((entry) => entry.adapter.id !== id),
+            event
+          );
+          for (const failure of failures) {
+            log(`${failure.id} could not handle ${event.type}: ${failure.error.message}`);
+          }
+        } finally {
+          emitting = false;
+        }
+      },
+    };
 
     let adapter: IntegrationAdapter;
     try {
@@ -141,6 +174,32 @@ export async function dispatchEvent(
       if (!adapter.onEvent) return;
       try {
         await adapter.onEvent(event);
+      } catch (error) {
+        failures.push({ id: adapter.id, error: error as Error });
+      }
+    })
+  );
+
+  return failures;
+}
+
+/**
+ * Closes the pass for every adapter that cares.
+ *
+ * Same policy as `dispatchEvent`, for the same reason: a GitHub commit that
+ * fails must not stop Telegram from flushing, and the caller decides how loudly
+ * to report it.
+ */
+export async function flushAll(
+  adapters: LoadedAdapter[]
+): Promise<Array<{ id: string; error: Error }>> {
+  const failures: Array<{ id: string; error: Error }> = [];
+
+  await Promise.all(
+    usableAdapters(adapters).map(async ({ adapter }) => {
+      if (!adapter.flush) return;
+      try {
+        await adapter.flush();
       } catch (error) {
         failures.push({ id: adapter.id, error: error as Error });
       }

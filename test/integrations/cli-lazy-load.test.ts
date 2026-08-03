@@ -30,10 +30,18 @@ describe('integrations do not load their transports on unrelated commands', () =
     await fs.mkdir(changeDir, { recursive: true });
     await fs.writeFile(path.join(changeDir, 'tasks.md'), '- [ ] 1.1 First\n', 'utf-8');
 
-    // Both integrations on: the worst case for eager loading.
+    // Every integration on: the worst case for eager loading.
     await fs.writeFile(
       path.join(projectRoot, 'openspec', 'integrations.yaml'),
-      ['telegram:', '  enabled: true', 'trello:', '  enabled: true', ''].join('\n'),
+      [
+        'telegram:',
+        '  enabled: true',
+        'trello:',
+        '  enabled: true',
+        'github:',
+        '  enabled: true',
+        '',
+      ].join('\n'),
       'utf-8'
     );
   });
@@ -57,6 +65,7 @@ describe('integrations do not load their transports on unrelated commands', () =
     expect(result.stdout).toContain('integrations');
     expect(result.stdout).toContain('trello');
     expect(result.stdout).toContain('telegram');
+    expect(result.stdout).toContain('github');
   });
 
   it('produces parseable JSON with the integrations enabled', async () => {
