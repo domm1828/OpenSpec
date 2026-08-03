@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import path from 'path';
 import { TrelloClient } from '../integrations/trello/client.js';
+import { GitHubClient } from '../integrations/github/client.js';
 import { syncTrello, type SyncDirection, type SyncReport } from '../integrations/trello/sync.js';
 import { createPairing, getPairedChatIds, unpairChat } from '../integrations/telegram/auth.js';
 import {
@@ -54,6 +55,10 @@ registerAdapter('telegram', async (config) => {
 registerAdapter('trello', async (config) => {
   const { createTrelloAdapter } = await import('../integrations/trello/adapter.js');
   return createTrelloAdapter(config);
+});
+registerAdapter('github', async (config) => {
+  const { createGithubAdapter } = await import('../integrations/github/adapter.js');
+  return createGithubAdapter(config);
 });
 
 async function resolveProjectRoot(options: { store?: string }): Promise<string | undefined> {
@@ -119,6 +124,7 @@ function registerIntegrationsGroup(program: Command): void {
         const config = readIntegrationsConfig(projectRoot);
         if (integration === 'telegram') config.telegram.enabled = verb === 'enable';
         if (integration === 'trello') config.trello.enabled = verb === 'enable';
+        if (integration === 'github') config.github.enabled = verb === 'enable';
         writeIntegrationsConfig(projectRoot, config);
 
         console.log(`${integration} ${verb}d in ${getIntegrationsConfigPath(projectRoot)}`);
@@ -613,8 +619,228 @@ function registerTelegramGroup(program: Command): void {
     });
 }
 
+// -----------------------------------------------------------------------------
+// openspec github ...
+// -----------------------------------------------------------------------------
+
+/**
+ * Builds the API client, reporting the missing credential rather than throwing.
+ *
+ * Kept separate from the adapter's own construction because these commands run
+ * before the integration is configured — `link` is how it *becomes* configured.
+ */
+function buildGithubClient(apiBaseUrl?: string): GitHubClient | undefined {
+  const missing = findMissingSecrets(['githubToken']);
+  if (missing.length > 0) {
+    fail(`Missing credentials: ${missing.map((m) => m.name).join(', ')}`, missing[0].hint);
+    return undefined;
+  }
+  return new GitHubClient(getSecret('githubToken')!, { baseUrl: apiBaseUrl });
+}
+
+function registerGithubGroup(program: Command): void {
+  const group = program
+    .command('github')
+    .description('Branch, commit and open pull requests as changes progress');
+
+  group
+    .command('link')
+    .description('Declare the git flow branches and write them into openspec/integrations.yaml')
+    .option('--repo <owner/name>', 'Repository, when it cannot be read from the remote')
+    .option('--main <branch>', 'Principal branch (defaults to the repository default)')
+    .option('--develop <branch>', 'Development branch (the base every PR targets)')
+    .option('--create-develop', 'Create the development branch from main if it is missing')
+    .option('--json', 'Output as JSON')
+    .action(
+      async (options: {
+        repo?: string;
+        main?: string;
+        develop?: string;
+        createDevelop?: boolean;
+        json?: boolean;
+      }) => {
+        const projectRoot = await resolveProjectRoot({});
+        if (!projectRoot) return;
+
+        const config = readIntegrationsConfig(projectRoot);
+        const client = buildGithubClient(config.github.apiBaseUrl);
+        if (!client) return;
+
+        const { linkRepository } = await import('../integrations/github/actions.js');
+
+        try {
+          const result = await linkRepository({
+            projectRoot,
+            client,
+            config: config.github,
+            repoSlug: options.repo,
+            main: options.main,
+            develop: options.develop,
+            createDevelop: options.createDevelop,
+          });
+
+          config.github.enabled = true;
+          config.github.owner = result.owner;
+          config.github.repo = result.repo;
+          config.github.gitflow.main = result.main;
+          config.github.gitflow.develop = result.develop;
+          writeIntegrationsConfig(projectRoot, config);
+
+          if (options.json) {
+            printJson({ github: result, configPath: getIntegrationsConfigPath(projectRoot) });
+            if (result.problem) process.exitCode = 1;
+            return;
+          }
+
+          console.log(`Linked ${result.owner}/${result.repo}.`);
+          console.log(`  ${'main'.padEnd(12)} → ${result.main}`);
+          console.log(
+            `  ${'develop'.padEnd(12)} → ${result.develop ?? '(unset)'}${
+              result.createdDevelop ? ' (created)' : ''
+            }`
+          );
+          console.log(
+            `  ${'feature'.padEnd(12)} → ${config.github.gitflow.featurePrefix}<change-id>`
+          );
+
+          if (result.problem) {
+            // Not a hard failure: owner, repo and main are worth keeping, and
+            // the healthcheck will keep saying this until it is resolved.
+            console.log(`\n! ${result.problem}`);
+            console.log('  Fix: openspec github link --create-develop, or --develop <branch>');
+            process.exitCode = 1;
+            return;
+          }
+
+          console.log(`\nEdit ${getIntegrationsConfigPath(projectRoot)} to change any of this.`);
+        } catch (error) {
+          fail((error as Error).message);
+        }
+      }
+    );
+
+  group
+    .command('start <changeId>')
+    .description('Create and check out the feature branch for a change')
+    .option('--from <branch>', 'Start point, when it should not be the development branch')
+    .option('--json', 'Output as JSON')
+    .action(async (changeId: string, options: { from?: string; json?: boolean }) => {
+      const projectRoot = await resolveProjectRoot({});
+      if (!projectRoot) return;
+
+      const config = readIntegrationsConfig(projectRoot);
+      const { startChangeBranch } = await import('../integrations/github/actions.js');
+
+      try {
+        const result = await startChangeBranch({
+          projectRoot,
+          config: config.github,
+          changeId,
+          from: options.from,
+        });
+
+        if (options.json) {
+          printJson(result);
+          if (result.action === 'skipped') process.exitCode = 1;
+          return;
+        }
+
+        switch (result.action) {
+          case 'created':
+            console.log(`Created and checked out ${result.branch} from ${result.startPoint}.`);
+            break;
+          case 'checked-out':
+            console.log(`Checked out the existing ${result.branch}.`);
+            break;
+          case 'already-current':
+            console.log(`Already on ${result.branch}.`);
+            break;
+          case 'skipped':
+            fail(`Cannot start ${result.branch}: ${result.reason}`, result.fix);
+            break;
+        }
+      } catch (error) {
+        fail((error as Error).message);
+      }
+    });
+
+  group
+    .command('pr <changeId>')
+    .description('Open or refresh the pull request for a change')
+    .option('--draft', 'Open it as a draft')
+    .option('--dry-run', 'Show what would be opened, without pushing or writing')
+    .option('--json', 'Output as JSON')
+    .action(
+      async (changeId: string, options: { draft?: boolean; dryRun?: boolean; json?: boolean }) => {
+        const projectRoot = await resolveProjectRoot({});
+        if (!projectRoot) return;
+
+        const config = readIntegrationsConfig(projectRoot);
+        const client = buildGithubClient(config.github.apiBaseUrl);
+        if (!client) return;
+
+        const { openChangePullRequest } = await import('../integrations/github/actions.js');
+
+        try {
+          const result = await openChangePullRequest({
+            projectRoot,
+            config: config.github,
+            changeId,
+            client,
+            draft: options.draft,
+            dryRun: options.dryRun,
+            log: (m) => !options.json && console.log(m),
+          });
+
+          if (options.json) {
+            printJson(result);
+          } else if (result.problem) {
+            fail(result.problem);
+            return;
+          } else if (result.url) {
+            console.log(`#${result.number}: ${result.url}`);
+          }
+
+          if (result.problem) process.exitCode = 1;
+        } catch (error) {
+          fail((error as Error).message);
+        }
+      }
+    );
+
+  group
+    .command('status')
+    .description('Check the GitHub connection, the repository and the branches')
+    .option('--json', 'Output as JSON')
+    .action(async (options: { json?: boolean }) => {
+      const projectRoot = await resolveProjectRoot({});
+      if (!projectRoot) return;
+
+      const adapters = await loadAdapters({
+        projectRoot,
+        only: ['github'],
+        log: (m) => console.error(m),
+      });
+      const [report] = await healthcheckAll(adapters);
+
+      if (!report) {
+        if (options.json) printJson({ github: null });
+        else console.log('GitHub is not enabled. Try: openspec github link');
+        return;
+      }
+
+      if (options.json) printJson({ github: report });
+      else {
+        console.log(`${report.level}: ${report.message}`);
+        if (report.fix) console.log(`Fix: ${report.fix}`);
+      }
+      if (report.level === 'error') process.exitCode = 1;
+    });
+}
+
 export function registerIntegrationCommands(program: Command): void {
   registerIntegrationsGroup(program);
   registerTrelloGroup(program);
   registerTelegramGroup(program);
+  registerGithubGroup(program);
 }

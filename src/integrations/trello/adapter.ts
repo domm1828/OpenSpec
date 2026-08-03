@@ -7,7 +7,7 @@ import type {
 import type { TrelloConfig } from '../config.js';
 import { getSecret, findMissingSecrets } from '../secrets.js';
 import { TrelloClient } from './client.js';
-import { archiveTrelloCard, syncTrello } from './sync.js';
+import { archiveTrelloCard, findCardForChange, syncTrello } from './sync.js';
 
 /**
  * Trello adapter.
@@ -22,10 +22,18 @@ export class TrelloAdapter implements IntegrationAdapter {
   private ctx?: IntegrationContext;
   private client?: TrelloClient;
 
-  constructor(private readonly config: TrelloConfig) {}
+  constructor(
+    private readonly config: TrelloConfig,
+    private readonly deps: { client?: TrelloClient } = {}
+  ) {}
 
   async init(ctx: IntegrationContext): Promise<void> {
     this.ctx = ctx;
+
+    if (this.deps.client) {
+      this.client = this.deps.client;
+      return;
+    }
 
     const key = getSecret('trelloKey');
     const token = getSecret('trelloToken');
@@ -40,6 +48,13 @@ export class TrelloAdapter implements IntegrationAdapter {
 
   async onEvent(event: OpenSpecEvent): Promise<void> {
     if (!this.ctx || !this.client || !event.changeId) return;
+
+    // Branch and pull request announcements land on the change's existing card
+    // rather than creating anything: one change is one card, for its whole life.
+    if (event.type === 'vcs.branch.created' || event.type === 'vcs.pr.opened') {
+      await this.annotateCard(event);
+      return;
+    }
 
     // Archiving needs its own path, not a sync. A regular sync enumerates
     // `openspec/changes/` and skips `archive/`, so an archived change is never
@@ -64,6 +79,52 @@ export class TrelloAdapter implements IntegrationAdapter {
       changeIds: [event.changeId],
       log: this.ctx.log,
     });
+  }
+
+  /**
+   * Records a branch or a pull request on the change's card.
+   *
+   * Looked up by name when the recorded id is gone, which it will be for a pull
+   * request: archiving settles the card and drops the state entry, and event
+   * dispatch is concurrent, so by the time the announcement arrives there may be
+   * no id left. Finding the card by name makes this independent of the order the
+   * two adapters happen to finish in, rather than imposing one on them.
+   *
+   * A missing card is not an error — the change may predate Trello being turned
+   * on — so nothing is created and nothing is thrown.
+   */
+  private async annotateCard(event: OpenSpecEvent): Promise<void> {
+    const url = typeof event.meta?.url === 'string' ? event.meta.url : undefined;
+    const branch = typeof event.meta?.branch === 'string' ? event.meta.branch : undefined;
+
+    const card = await findCardForChange({
+      projectRoot: this.ctx!.projectRoot,
+      config: this.config,
+      client: this.client!,
+      changeId: event.changeId!,
+    });
+
+    if (!card) {
+      this.ctx!.log(`Trello: no card for ${event.changeId}, so ${event.type} was not recorded`);
+      return;
+    }
+
+    if (event.type === 'vcs.branch.created') {
+      await this.client!.addCardComment(card.id, `Branch \`${branch ?? '(unknown)'}\` created.`);
+      return;
+    }
+
+    const number = typeof event.meta?.number === 'number' ? event.meta.number : undefined;
+    if (url) {
+      await this.client!.addCardAttachment(card.id, {
+        url,
+        name: number ? `Pull request #${number}` : 'Pull request',
+      });
+    }
+    await this.client!.addCardComment(
+      card.id,
+      `Pull request opened from \`${branch ?? '(unknown)'}\`${url ? `: ${url}` : ''}`
+    );
   }
 
   async healthcheck(): Promise<HealthReport> {

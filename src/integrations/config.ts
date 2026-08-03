@@ -78,6 +78,48 @@ export const TrelloConfigSchema = z.object({
 });
 
 /**
+ * The three branches git flow is made of.
+ *
+ * Written by `openspec github link`, never guessed at runtime. Defaulting
+ * `develop` to `main` when the repo has no develop branch would silently turn a
+ * git-flow project into a trunk-based one and open every pull request against
+ * the release branch — so an unset `develop` is an error the healthcheck
+ * reports, not a value the adapter invents.
+ */
+export const GithubFlowSchema = z.object({
+  main: z.string().optional(),
+  develop: z.string().optional(),
+  featurePrefix: z.string().default('feature/'),
+});
+
+export const GithubConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  owner: z.string().optional(),
+  repo: z.string().optional(),
+  gitflow: GithubFlowSchema.prefault({}),
+  /** Create and check out the feature branch when a change appears. */
+  autoBranch: z.boolean().default(true),
+  /** Commit the working tree when tasks are ticked. */
+  autoCommit: z.boolean().default(true),
+  /**
+   * What a commit sweeps up.
+   *
+   * `all` is the honest default: a ticked task means code was written, and a
+   * commit that carries the checkbox without the work it describes is a lie in
+   * the history. `openspec-only` is for projects that want the change's paper
+   * trail automated and the code commits authored by hand.
+   */
+  commitScope: z.enum(['all', 'openspec-only']).default('all'),
+  /** Push each commit as it is made, rather than only when the PR is opened. */
+  pushOnCommit: z.boolean().default(false),
+  openPrOnArchive: z.boolean().default(true),
+  draftPr: z.boolean().default(false),
+  remote: z.string().default('origin'),
+  /** Point at a GitHub Enterprise instance by changing this. */
+  apiBaseUrl: z.string().default('https://api.github.com'),
+});
+
+/**
  * `prefault` rather than `default`: Zod 4's `.default()` must satisfy the
  * *output* type, so `{}` would be rejected for a schema with required output
  * fields. `prefault` feeds `{}` through the schema instead, letting each field's
@@ -87,10 +129,12 @@ export const TrelloConfigSchema = z.object({
 export const IntegrationsConfigSchema = z.object({
   telegram: TelegramConfigSchema.prefault({}),
   trello: TrelloConfigSchema.prefault({}),
+  github: GithubConfigSchema.prefault({}),
 });
 
 export type TelegramConfig = z.infer<typeof TelegramConfigSchema>;
 export type TrelloConfig = z.infer<typeof TrelloConfigSchema>;
+export type GithubConfig = z.infer<typeof GithubConfigSchema>;
 export type IntegrationsConfig = z.infer<typeof IntegrationsConfigSchema>;
 
 export const INTEGRATIONS_CONFIG_FILENAME = 'integrations.yaml';
@@ -157,5 +201,6 @@ export function enabledIntegrationIds(config: IntegrationsConfig): string[] {
   const ids: string[] = [];
   if (config.telegram.enabled) ids.push('telegram');
   if (config.trello.enabled) ids.push('trello');
+  if (config.github.enabled) ids.push('github');
   return ids;
 }

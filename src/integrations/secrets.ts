@@ -17,6 +17,7 @@ export const SECRET_ENV_VARS = {
   telegramBotToken: 'OPENSPEC_TELEGRAM_BOT_TOKEN',
   trelloKey: 'OPENSPEC_TRELLO_KEY',
   trelloToken: 'OPENSPEC_TRELLO_TOKEN',
+  githubToken: 'OPENSPEC_GITHUB_TOKEN',
 } as const;
 
 export type SecretName = keyof typeof SECRET_ENV_VARS;
@@ -88,6 +89,8 @@ const SECRET_HINTS: Record<SecretName, string> = {
     'Generate an API key from a Power-Up at https://trello.com/power-ups/admin (API Key tab), then: openspec integrations secret set trelloKey <key>',
   trelloToken:
     'Authorize with https://trello.com/1/authorize?expiration=never&scope=read,write&response_type=token&key=<KEY>, then: openspec integrations secret set trelloToken <token>',
+  githubToken:
+    'Create a token with the "repo" scope at https://github.com/settings/tokens (or a fine-grained token with Contents and Pull requests write), then: openspec integrations secret set githubToken <token>',
 };
 
 /** Reports which of the requested secrets are unset, with the fix for each. */

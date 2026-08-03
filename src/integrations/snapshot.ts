@@ -124,7 +124,25 @@ export async function readChangeSnapshot(
   projectRoot: string,
   changeId: string
 ): Promise<ChangeSnapshot> {
-  const changeDir = path.join(changesDirFor(projectRoot), changeId);
+  return readChangeSnapshotFromDir(
+    projectRoot,
+    changeId,
+    path.join(changesDirFor(projectRoot), changeId)
+  );
+}
+
+/**
+ * Same, for a change that is not where active changes live.
+ *
+ * Archiving moves a change under `openspec/changes/archive/<date>-<id>/`, and
+ * that is exactly when the GitHub integration needs to read it — to write the
+ * pull request body describing what was just finished.
+ */
+export async function readChangeSnapshotFromDir(
+  projectRoot: string,
+  changeId: string,
+  changeDir: string
+): Promise<ChangeSnapshot> {
   const files = await resolveTaskFiles(changeDir, projectRoot);
 
   const tasks: TaskRef[] = [];

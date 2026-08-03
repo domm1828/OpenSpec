@@ -39,8 +39,33 @@ async function readJson<T>(filePath: string, makeFallback: () => T): Promise<T> 
   }
 }
 
+/**
+ * Creates the state directory and makes it ignore itself.
+ *
+ * The `.gitignore` is not a nicety. This directory is machine-local sync state,
+ * and the moment it gets committed it becomes a trap: switching to a branch that
+ * does not have it makes git delete it (losing every card id and baseline), and
+ * switching to one that has a *different* version aborts the checkout outright.
+ * Documenting "add it to .gitignore" is not enough, because the cost of one
+ * person forgetting is someone else's sync state.
+ *
+ * A directory containing `*` ignores everything in itself, including the
+ * `.gitignore`, so this works no matter what the project's root .gitignore says.
+ */
+async function ensureStateDir(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+
+  const ignorePath = path.join(dir, '.gitignore');
+  try {
+    await fs.access(ignorePath);
+  } catch {
+    // Best-effort: a read-only checkout must not stop the sync from working.
+    await fs.writeFile(ignorePath, '*\n', 'utf-8').catch(() => undefined);
+  }
+}
+
 async function writeJson(filePath: string, value: unknown): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await ensureStateDir(path.dirname(filePath));
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
@@ -70,8 +95,14 @@ export interface ChangeSyncState {
   lastRemoteActivity?: string;
 }
 
-export interface AdapterState {
-  changes: Record<string, ChangeSyncState>;
+/**
+ * Generic in the per-change entry because not every adapter tracks a checklist
+ * baseline: GitHub records a branch and a pull request, and squeezing that into
+ * `ChangeSyncState` would leave every Trello state file carrying fields it has
+ * no use for. The default keeps every existing caller unchanged.
+ */
+export interface AdapterState<TChange = ChangeSyncState> {
+  changes: Record<string, TChange>;
   /** Adapter-specific extras (board id caches, pairing codes, chat ids). */
   extra?: Record<string, unknown>;
 }
@@ -80,20 +111,21 @@ function adapterStatePath(projectRoot: string, adapterId: string): string {
   return path.join(getStateDir(projectRoot), `${adapterId}-state.json`);
 }
 
-export async function readAdapterState(
+export async function readAdapterState<TChange = ChangeSyncState>(
   projectRoot: string,
   adapterId: string
-): Promise<AdapterState> {
-  const state = await readJson<AdapterState>(adapterStatePath(projectRoot, adapterId), () => ({
-    changes: {},
-  }));
+): Promise<AdapterState<TChange>> {
+  const state = await readJson<AdapterState<TChange>>(
+    adapterStatePath(projectRoot, adapterId),
+    () => ({ changes: {} })
+  );
   return { changes: state.changes ?? {}, extra: state.extra };
 }
 
-export async function writeAdapterState(
+export async function writeAdapterState<TChange = ChangeSyncState>(
   projectRoot: string,
   adapterId: string,
-  state: AdapterState
+  state: AdapterState<TChange>
 ): Promise<void> {
   await writeJson(adapterStatePath(projectRoot, adapterId), state);
 }

@@ -207,10 +207,18 @@ export class TrelloClient {
     });
   }
 
-  /** Board cards with just enough fields to decide what changed. */
-  async getBoardCards(boardId: string): Promise<TrelloCard[]> {
+  /**
+   * Board cards with just enough fields to decide what changed.
+   *
+   * `filter` defaults to Trello's own default, which is open cards only. Pass
+   * `all` when the card being looked for may have been closed — settling an
+   * archived change with `onArchive: close` does exactly that, and the card is
+   * then invisible to the default filter.
+   */
+  async getBoardCards(boardId: string, filter?: 'open' | 'all'): Promise<TrelloCard[]> {
     return this.request<TrelloCard[]>('GET', `/boards/${boardId}/cards`, {
       fields: 'id,name,desc,idList,closed,dateLastActivity,shortUrl',
+      filter,
     });
   }
 
@@ -284,6 +292,25 @@ export class TrelloClient {
 
   async deleteCheckItem(checklistId: string, checkItemId: string): Promise<void> {
     await this.request<null>('DELETE', `/checklists/${checklistId}/checkItems/${checkItemId}`);
+  }
+
+  /**
+   * Attaches a URL to a card.
+   *
+   * Trello renders a URL attachment as a rich link on the card front, which is
+   * what makes a pull request visible without opening the card — the reason this
+   * is an attachment rather than another line appended to the description.
+   */
+  async addCardAttachment(cardId: string, input: { url: string; name?: string }): Promise<void> {
+    await this.request('POST', `/cards/${cardId}/attachments`, {
+      url: input.url,
+      name: input.name,
+    });
+  }
+
+  /** Comments on a card, so the board keeps a dated trail of what happened. */
+  async addCardComment(cardId: string, text: string): Promise<void> {
+    await this.request('POST', `/cards/${cardId}/actions/comments`, { text });
   }
 
   /** Verifies the credentials and returns the authenticated username. */

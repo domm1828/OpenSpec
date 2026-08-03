@@ -1,7 +1,7 @@
 import { readAllChangeSnapshots } from './snapshot.js';
 import { deriveEvents, snapshotFromChanges } from './events.js';
 import { readWatchSnapshot, writeWatchSnapshot } from './state.js';
-import { dispatchEvent, type LoadedAdapter } from './registry.js';
+import { dispatchEvent, flushAll, type LoadedAdapter } from './registry.js';
 import type { OpenSpecEvent } from './types.js';
 
 /**
@@ -47,6 +47,12 @@ export async function runWatchPass(options: WatcherOptions): Promise<OpenSpecEve
     for (const failure of failures) {
       log(`${failure.id} could not handle ${event.type}: ${failure.error.message}`);
     }
+  }
+
+  // Flush before the snapshot, so an adapter that batches this pass's events
+  // (GitHub commits them as one) still sees them as belonging to this pass.
+  for (const failure of await flushAll(adapters)) {
+    log(`${failure.id} could not finish the pass: ${failure.error.message}`);
   }
 
   await writeWatchSnapshot(projectRoot, snapshotFromChanges(changes));

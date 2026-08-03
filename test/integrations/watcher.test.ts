@@ -14,13 +14,21 @@ import type {
 class RecordingAdapter implements IntegrationAdapter {
   readonly id = 'recorder';
   readonly seen: OpenSpecEvent[] = [];
+  /** Events seen at the moment each flush ran, so ordering is observable. */
+  readonly flushes: number[] = [];
   shouldThrow = false;
+  flushShouldThrow = false;
 
   async init(): Promise<void> {}
 
   async onEvent(event: OpenSpecEvent): Promise<void> {
     if (this.shouldThrow) throw new Error('adapter is down');
     this.seen.push(event);
+  }
+
+  async flush(): Promise<void> {
+    if (this.flushShouldThrow) throw new Error('flush is down');
+    this.flushes.push(this.seen.length);
   }
 
   async healthcheck(): Promise<HealthReport> {
@@ -119,6 +127,37 @@ describe('watcher', () => {
     // adapter must not pin the watcher to the same event on every pass.
     adapter.shouldThrow = false;
     expect(await runWatchPass({ projectRoot, adapters })).toEqual([]);
+  });
+
+  it('flushes once per pass, after every event of that pass', async () => {
+    // The GitHub adapter batches a pass into one commit, so a flush that ran
+    // before the last event would leave that task out of it.
+    await primeWatchSnapshot(projectRoot);
+    await fs.writeFile(
+      tasksPath,
+      TASKS.replace('- [ ] 1.1 First', '- [x] 1.1 First').replace(
+        '- [ ] 1.2 Second',
+        '- [x] 1.2 Second'
+      ),
+      'utf-8'
+    );
+
+    await runWatchPass({ projectRoot, adapters });
+
+    expect(adapter.seen).toHaveLength(2);
+    expect(adapter.flushes).toEqual([2]);
+  });
+
+  it('reports a failing flush without losing the pass', async () => {
+    await primeWatchSnapshot(projectRoot);
+    adapter.flushShouldThrow = true;
+    await fs.writeFile(tasksPath, TASKS.replace('- [ ] 1.1 First', '- [x] 1.1 First'), 'utf-8');
+
+    const messages: string[] = [];
+    const events = await runWatchPass({ projectRoot, adapters, log: (m) => messages.push(m) });
+
+    expect(events.map((e) => e.type)).toEqual(['task.checked']);
+    expect(messages.join(' ')).toContain('flush is down');
   });
 
   it('survives a project with no openspec directory at all', async () => {

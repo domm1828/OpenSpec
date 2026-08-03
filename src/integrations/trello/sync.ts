@@ -76,6 +76,45 @@ export function cardDescription(change: ChangeSnapshot, projectRoot: string): st
   return lines.filter((line) => line !== undefined).join('\n');
 }
 
+/**
+ * The card that represents a change, from a set of cards already fetched.
+ *
+ * Two ways in, in this order: the id recorded at the last sync, and failing
+ * that the card named after the change. The fallback is what keeps a change to
+ * one card — after `.openspec-integrations/` is deleted, or on a second clone,
+ * or once the archive path has dropped the state entry, the id is gone but the
+ * card is still sitting on the board under the change's name.
+ */
+export function findCardIn(
+  boardCards: TrelloCard[],
+  changeId: string,
+  remoteId?: string
+): TrelloCard | undefined {
+  const byId = remoteId ? boardCards.find((card) => card.id === remoteId) : undefined;
+  return byId ?? boardCards.find((card) => card.name === changeId);
+}
+
+/**
+ * Same, but does the fetching — and looks at closed cards too.
+ *
+ * Used by the paths that run after a change is archived, where the card may
+ * have been closed by `onArchive: close` and would be invisible to the default
+ * open-cards-only filter.
+ */
+export async function findCardForChange(options: {
+  projectRoot: string;
+  config: TrelloConfig;
+  client: TrelloClient;
+  changeId: string;
+}): Promise<TrelloCard | undefined> {
+  const { projectRoot, config, client, changeId } = options;
+  if (!config.boardId) return undefined;
+
+  const state = await readAdapterState(projectRoot, 'trello');
+  const boardCards = await client.getBoardCards(config.boardId, 'all');
+  return findCardIn(boardCards, changeId, state.changes[changeId]?.remoteId);
+}
+
 async function ensureCard(
   client: TrelloClient,
   config: TrelloConfig,
@@ -85,9 +124,7 @@ async function ensureCard(
   projectRoot: string,
   dryRun: boolean
 ): Promise<{ card?: TrelloCard; created: boolean; error?: string }> {
-  const existing = state.remoteId
-    ? boardCards.find((card) => card.id === state.remoteId)
-    : boardCards.find((card) => card.name === change.id);
+  const existing = findCardIn(boardCards, change.id, state.remoteId);
 
   if (existing) return { card: existing, created: false };
 

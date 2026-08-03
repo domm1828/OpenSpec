@@ -1,4 +1,4 @@
-# Integrations: Telegram and Trello
+# Integrations: Telegram, Trello and GitHub
 
 OpenSpec keeps everything in Markdown on disk. That is great for agents and for
 git, and useless for anyone who is not sitting in front of the repo. This layer
@@ -6,9 +6,12 @@ opens that boundary in both directions:
 
 - **Telegram** — a bot you can ask about changes and use to tick tasks.
 - **Trello** — a two-way sync between `tasks.md` and a board's checklists.
+- **GitHub** — git flow driven by the change's life cycle: a feature branch when
+  it starts, a commit as tasks are ticked, a pull request when it is archived.
 
-Both are off by default and both are adapters over one shared layer, so adding a
-third (Slack, Jira, Linear) means writing one file, not reworking the plumbing.
+All three are off by default and all three are adapters over one shared layer, so
+adding a fourth (Slack, Jira, Linear) means writing one file, not reworking the
+plumbing.
 
 ---
 
@@ -18,7 +21,10 @@ third (Slack, Jira, Linear) means writing one file, not reworking the plumbing.
 openspec/                       watcher (polls every 5s)
   changes/<id>/tasks.md   ──▶   diff vs snapshot   ──▶   events   ──▶   adapters
                                                                         ├─ telegram
-                                                                        └─ trello
+                                                                        ├─ trello
+                                                                        └─ github
+                                                                             │
+                                    vcs.* announcements  ◀───────────────────┘
 ```
 
 The **watcher** is the important part. OpenSpec's CLI is an ephemeral process,
@@ -29,6 +35,19 @@ tree and diffs it against a stored snapshot.
 
 Events: `change.created`, `change.updated`, `change.archived`, `change.validated`,
 `task.checked`, `task.unchecked`, `spec.updated`.
+
+Three more are *announced by an adapter* rather than derived from disk —
+`vcs.branch.created`, `vcs.commit.created`, `vcs.pr.opened`. A branch and a pull
+request are things an adapter **did**, not things it observed, and this is how one
+adapter tells the others without either one importing the other: GitHub states
+the fact, Trello puts the link on the card, Telegram can be told to notify on it.
+An adapter never hears its own announcement, and an announcement cannot trigger
+another.
+
+Each pass also **ends**. After the last event is dispatched, every adapter gets a
+`flush()`. That exists so an adapter can act on a pass rather than on each event:
+ticking three checkboxes in one edit is three events over one working tree, and
+GitHub turns that into one commit instead of one full commit and two empty ones.
 
 ### Where things live
 
@@ -64,6 +83,7 @@ Never put these in `openspec/integrations.yaml`; that file is committed.
 openspec integrations secret set trelloKey        <key>
 openspec integrations secret set trelloToken      <token>
 openspec integrations secret set telegramBotToken <token>
+openspec integrations secret set githubToken      <token>
 openspec integrations secret list                 # values are masked
 ```
 
@@ -71,6 +91,7 @@ Environment variables take precedence, which is what you want in CI:
 
 - `OPENSPEC_TRELLO_KEY`, `OPENSPEC_TRELLO_TOKEN`
 - `OPENSPEC_TELEGRAM_BOT_TOKEN`
+- `OPENSPEC_GITHUB_TOKEN`
 
 ---
 
@@ -291,6 +312,120 @@ connection and works behind NAT with no tunnel.
 
 ---
 
+## GitHub
+
+The change's life cycle *is* the git flow cycle:
+
+| Event | What happens |
+|---|---|
+| `change.created` | `feature/<change-id>` is branched off develop and checked out |
+| `task.checked` | one commit per watch pass, on that branch |
+| `change.archived` | the archive is committed, the branch is pushed, a pull request is opened against develop |
+
+### Setting up
+
+```bash
+openspec integrations secret set githubToken <token>   # "repo" scope
+openspec github link                                   # declares the branches
+openspec github status                                 # health check
+```
+
+`link` reads the repository from your `origin` remote, then **declares the two
+branches explicitly** and writes them into `openspec/integrations.yaml`:
+
+```
+Linked domm1828/OpenSpec.
+  main         → main
+  develop      → develop
+  feature      → feature/<change-id>
+```
+
+Nothing is guessed. If the repository has no development branch, `link` says so
+and stops rather than falling back to the default branch — that fallback would
+silently turn a git-flow project into a trunk-based one and point every pull
+request at the release branch, which is the one mistake git flow exists to
+prevent. Create it deliberately:
+
+```bash
+openspec github link --create-develop            # branches develop off main
+openspec github link --develop integration       # or name your own
+```
+
+### The three commands you may still want
+
+```bash
+openspec github start <change-id>     # create/check out the branch by hand
+openspec github pr <change-id>        # open or refresh the PR before archiving
+openspec github status                # connection, repository, branches
+```
+
+`start` is the escape hatch for every case where the automatic path declined —
+which it will, often, and on purpose.
+
+### What it refuses to do
+
+Everything here runs unattended, in the same working tree an AI agent is
+editing. Each guard below is a specific way that could go wrong, and every one of
+them results in a logged skip with the command that fixes it — never a write, and
+never an aborted watch pass that would take Telegram and Trello down with it.
+
+| Situation | What happens |
+|---|---|
+| Not a git repository, or no commits yet | nothing, with the fix |
+| A rebase, merge or cherry-pick in progress | nothing — committing mid-operation rewrites the wrong thing |
+| Dirty working tree, at branch time | no branch: checking out would carry that work into a change it has nothing to do with |
+| HEAD is not on develop, at branch time | no branch: you are probably working on something else, and being yanked out of it is the surprise that makes people turn integrations off |
+| HEAD is not on the change's branch, at commit time | **no commit.** With two changes active this is the difference between a pull request carrying its own work and carrying someone else's |
+| Nothing to commit | no commit, ever `--allow-empty` |
+| The change vanished but is not in `archive/` | no pull request: it was deleted, not finished |
+| A pull request already exists for the branch | it is refreshed, not duplicated |
+| A commit fails | the ticked tasks stay pending and the next pass retries them with the same message |
+
+`.openspec-integrations/` is excluded from every automatic commit regardless of
+your `.gitignore` — it is machine-local sync state, and a baseline committed to a
+branch is a merge conflict waiting to happen.
+
+### Why one commit per pass, not per task
+
+An agent that ticks three checkboxes in one edit produces three `task.checked`
+events over a single working tree. One commit per event would put the entire diff
+in the first one and leave two behind it describing work they do not contain. So
+the pass is the unit: one task gets its description as the subject, several get a
+count and the list in the body.
+
+### Turning parts of it off
+
+```yaml
+github:
+  autoBranch: true          # branch on change.created
+  autoCommit: true          # commit on task.checked
+  openPrOnArchive: true     # pull request on change.archived
+  commitScope: all          # all | openspec-only
+  pushOnCommit: false       # push every commit, not just at PR time
+  draftPr: false
+```
+
+Each stage is separately switchable because wanting the branches and commits
+automated while opening pull requests by hand is a perfectly reasonable position.
+`commitScope: openspec-only` goes further: OpenSpec commits the change's paper
+trail, you author the code commits.
+
+### What is not in scope
+
+Nothing flows back from GitHub into OpenSpec. Reviews, merges and comments do not
+write to `tasks.md`, for the same reason a Trello card's list position does not:
+it would need a second source of truth that drifts from `openspec list`. Merging
+the pull request and deleting the branch are also yours — the integration opens
+the door, it does not walk through it.
+
+### Interaction with Telegram
+
+`telegram.autoCommit` is a promise that was never implemented. With GitHub
+enabled it is real by another route: a task ticked from the bot is seen by the
+watcher and committed like any other tick.
+
+---
+
 ## Running the watcher
 
 ```bash
@@ -335,6 +470,23 @@ trello:
   checklistName: Tasks
   conflictPolicy: manual             # manual | local-wins | remote-wins
   pollIntervalSec: 60
+
+github:
+  enabled: true
+  owner: domm1828                    # written by `openspec github link`
+  repo: OpenSpec
+  gitflow:
+    main: main                       # principal branch
+    develop: develop                 # base and target of every pull request
+    featurePrefix: feature/
+  autoBranch: true
+  autoCommit: true
+  commitScope: all                   # all | openspec-only
+  pushOnCommit: false
+  openPrOnArchive: true
+  draftPr: false
+  remote: origin
+  apiBaseUrl: https://api.github.com # change for GitHub Enterprise
 ```
 
 ---
@@ -344,13 +496,23 @@ trello:
 1. Implement `IntegrationAdapter` from `src/integrations/types.ts`.
 2. Add its config to `IntegrationsConfigSchema` in `src/integrations/config.ts`
    (use `.prefault({})`, not `.default({})` — Zod 4's `default` must satisfy the
-   *output* type, so `{}` is rejected for a schema with required output fields).
+   *output* type, so `{}` is rejected for a schema with required output fields),
+   and a `case` for it in `configFor` and `enabledIntegrationIds`.
 3. `registerAdapter('yourId', createYourAdapter)` in
-   `src/commands/integrations.ts`.
+   `src/commands/integrations.ts`. Register it with `await import()` — this file
+   is loaded by *every* `openspec` invocation, and a static import drags your
+   transport into `openspec list`.
 4. Reuse `readAllChangeSnapshots` and `applyCheckboxEdits` rather than parsing
    or writing Markdown yourself — the parser handles nested tasks, CRLF, and
    multi-file task globs, and the writer refuses a stale line rather than
    corrupting one.
+
+Two optional hooks are worth knowing about:
+
+- `flush()` — called once at the end of every watch pass, after the last event.
+  Implement it when the pass, not the event, is your unit of work.
+- `ctx.emit(event)` — announce something you *did* to the other adapters. Use it
+  instead of importing another adapter to ask it for a value.
 
 ---
 
@@ -370,3 +532,14 @@ by hand once and sync; or set `conflictPolicy` if one side should always win.
 
 **`⚠ skipped local edit: line changed since the last sync`** — the file moved
 under the sync. Nothing was written. Re-run.
+
+**GitHub committed nothing** — the log line says which guard stopped it. The two
+common ones are a dirty tree at branch time and HEAD sitting on a different
+branch than the change's; `openspec github start <change-id>` resolves both.
+
+**`GitHub refused the pull request … no commits between`** — the feature branch
+holds nothing develop does not. Usually the work was committed on develop before
+the branch existed.
+
+**No development branch** — `openspec github link --create-develop`, or
+`--develop <branch>` if yours is called something else.
