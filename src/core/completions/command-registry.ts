@@ -765,4 +765,156 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
       },
     ],
   },
+  {
+    name: 'integrations',
+    description: 'Manage Telegram/Trello integrations',
+    flags: [],
+    subcommands: [
+      {
+        name: 'list',
+        description: 'Show which integrations are registered and enabled',
+        flags: [COMMON_FLAGS.json],
+      },
+      {
+        name: 'enable',
+        description: 'Turn on an integration for this project',
+        acceptsPositional: true,
+        positionals: [{ name: 'integration' }],
+        flags: [],
+      },
+      {
+        name: 'disable',
+        description: 'Turn off an integration for this project',
+        acceptsPositional: true,
+        positionals: [{ name: 'integration' }],
+        flags: [],
+      },
+      {
+        name: 'status',
+        description: 'Health-check every enabled integration',
+        flags: [COMMON_FLAGS.json],
+      },
+      {
+        name: 'secret',
+        description: 'Manage integration credentials',
+        flags: [],
+        subcommands: [
+          {
+            name: 'set',
+            description: 'Store a credential outside the repo',
+            acceptsPositional: true,
+            positionals: [{ name: 'name' }, { name: 'value' }],
+            flags: [],
+          },
+          {
+            name: 'list',
+            description: 'Show which credentials are set (values are masked)',
+            flags: [COMMON_FLAGS.json],
+          },
+        ],
+      },
+      {
+        name: 'watch',
+        description: 'Watch openspec/ and forward changes to every enabled integration',
+        flags: [
+          {
+            name: 'interval',
+            description: 'Poll interval in milliseconds',
+            takesValue: true,
+          },
+          {
+            name: 'prime',
+            description: 'Record the current state and exit, without notifying',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'trello',
+    description: 'Sync changes and tasks with a Trello board',
+    flags: [],
+    subcommands: [
+      {
+        name: 'link',
+        description: 'Discover the board lists and write listMap into openspec/integrations.yaml',
+        acceptsPositional: true,
+        positionals: [{ name: 'boardId' }],
+        flags: [
+          {
+            name: 'create-lists',
+            description: 'Create the standard lists on the board if they are missing',
+          },
+          COMMON_FLAGS.json,
+        ],
+      },
+      {
+        name: 'sync',
+        description: 'Reconcile tasks.md with the board',
+        flags: [
+          {
+            name: 'direction',
+            description: 'Which side may be written',
+            takesValue: true,
+            values: ['both', 'push', 'pull'],
+          },
+          {
+            name: 'dry-run',
+            description: 'Show the plan without writing anything',
+          },
+          {
+            name: 'change',
+            description: 'Limit to one change',
+            takesValue: true,
+          },
+          COMMON_FLAGS.json,
+        ],
+      },
+      {
+        name: 'status',
+        description: 'Check the Trello connection and mapping',
+        flags: [COMMON_FLAGS.json],
+      },
+    ],
+  },
+  {
+    name: 'telegram',
+    description: 'Run and manage the Telegram bot',
+    flags: [],
+    subcommands: [
+      {
+        name: 'pair',
+        description: 'Generate a one-time code to link a chat',
+        flags: [COMMON_FLAGS.json],
+      },
+      {
+        name: 'chats',
+        description: 'List linked chats',
+        flags: [COMMON_FLAGS.json],
+      },
+      {
+        name: 'unpair',
+        description: 'Revoke a linked chat',
+        acceptsPositional: true,
+        positionals: [{ name: 'chatId' }],
+        flags: [],
+      },
+      {
+        name: 'test',
+        description: 'Verify the token and notify every linked chat',
+        flags: [],
+      },
+      {
+        name: 'serve',
+        description: 'Run the bot with long polling, and watch openspec/ for changes',
+        flags: [
+          {
+            name: 'interval',
+            description: 'Watch poll interval in milliseconds',
+            takesValue: true,
+          },
+        ],
+      },
+    ],
+  },
 ];

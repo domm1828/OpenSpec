@@ -166,3 +166,7 @@ opencode.json
 
 # Cursor
 .cursor/
+
+# Integrations sync state (machine-local: card ids, baselines, pairings).
+# Committing it would make every branch a merge conflict over cache data.
+.openspec-integrations/
