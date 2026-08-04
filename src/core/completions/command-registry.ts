@@ -767,7 +767,7 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
   },
   {
     name: 'integrations',
-    description: 'Manage Telegram/Trello integrations',
+    description: 'Manage Telegram/Trello/GitHub integrations',
     flags: [],
     subcommands: [
       {

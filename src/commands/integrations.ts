@@ -83,7 +83,7 @@ function fail(message: string, fix?: string): void {
 function registerIntegrationsGroup(program: Command): void {
   const group = program
     .command('integrations')
-    .description('Manage Telegram/Trello integrations');
+    .description('Manage Telegram/Trello/GitHub integrations');
 
   group
     .command('list')
