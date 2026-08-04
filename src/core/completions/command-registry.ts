@@ -814,6 +814,14 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         ],
       },
       {
+        name: 'sync',
+        description: 'Run a single watch pass and exit, forwarding whatever moved',
+        flags: [
+          COMMON_FLAGS.json,
+          { name: 'quiet', description: 'Say nothing unless something went wrong' },
+        ],
+      },
+      {
         name: 'watch',
         description: 'Watch openspec/ and forward changes to every enabled integration',
         flags: [

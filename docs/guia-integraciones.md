@@ -330,7 +330,8 @@ que `telegram.autoCommit` prometía y nunca implementó.
 
 Es el corazón de todo: relee `openspec/` cada 5s y difea contra un snapshot. Sin
 él no pasa nada automático, porque tu agente edita Markdown directo y ningún
-comando llega a correr.
+comando llega a correr — `opsx:apply` es **read-only**, solo imprime
+instrucciones, así que el tilde nunca pasa por el CLI.
 
 ```bash
 openspec integrations watch --prime       # baseline, sin notificar nada
@@ -342,6 +343,65 @@ openspec telegram serve                   # bot + watcher en un solo proceso
 **Corré `--prime` una vez** al adoptar el watcher en un proyecto que ya tiene
 changes. Si no, el primer pase ve cada change existente como nuevo y dispara un
 `change.created` por cada uno.
+
+### 6.1 Sin dejar nada corriendo: `integrations sync`
+
+Es exactamente un pase del watcher, y sale:
+
+```bash
+openspec integrations sync           # imprime lo que se movió
+openspec integrations sync --quiet   # calla salvo que algo falle
+openspec integrations sync --json
+```
+
+No arranca el bot de Telegram (eso colgaría un comando que tiene que terminar) y
+no falla cuando no hay integraciones prendidas — está pensado para colgarlo de un
+hook que se dispara en cada edición, y un proyecto con todo apagado no debería
+pintarse de rojo en cada guardado.
+
+### 6.2 Colgarlo de un hook de Claude Code
+
+Así el tilde llega a Trello y a GitHub **en el momento**, sin proceso de fondo.
+En `.claude/settings.json` del proyecto:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -qiE 'openspec[\\\\/]+changes' && openspec integrations sync --quiet 2>/dev/null || true",
+            "async": true,
+            "timeout": 60,
+            "statusMessage": "Syncing OpenSpec integrations"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Tres detalles que importan:
+
+- El `grep` lee el JSON que Claude Code manda por stdin y filtra por la ruta, así
+  que el hook solo corre cuando se tocó algo bajo `openspec/changes/`. La clase
+  de caracteres `[\\/]` cubre las dos formas de separador, porque en Windows la
+  ruta llega con backslashes escapados.
+- **`async: true`** lo tira al fondo: la edición del agente no espera al sync.
+- El `|| true` final es obligatorio. Sin él, `grep` sale 1 cuando la ruta no
+  matchea y Claude Code lo lee como un hook que falló, en cada edición.
+
+Después de crear o editar ese archivo, abrí `/hooks` una vez (o reiniciá la
+sesión) para que Claude Code lo cargue. Si `.claude/` no existía cuando arrancó
+la sesión, el watcher de settings no lo estaba mirando.
+
+Para verlo funcionar: `/hooks` lista lo que está activo, y la UI solo muestra
+"Ran N hooks" cuando uno falla o tarda — el éxito silencioso es invisible a
+propósito.
 
 Eventos: `change.created`, `change.updated`, `change.archived`,
 `change.validated`, `task.checked`, `task.unchecked`, `spec.updated`, más
@@ -362,6 +422,7 @@ adapter de GitHub.
 | `integrations status` | `--json` | health check de todo lo prendido, con el fix de cada problema |
 | `integrations secret set <name> <value>` | | guarda una credencial fuera del repo |
 | `integrations secret list` | `--json` | qué credenciales hay (enmascaradas) |
+| `integrations sync` | `--json`, `--quiet` | un solo pase y sale, para hooks y scripts |
 | `integrations watch` | `--interval <ms>`, `--prime` | mira `openspec/` y despacha a todo lo prendido |
 
 Nombres de secretos: `githubToken`, `trelloKey`, `trelloToken`,
@@ -509,17 +570,21 @@ openspec integrations status              # todo en verde antes de seguir
 openspec integrations watch --prime
 ```
 
-Después, en una terminal aparte:
+Después, elegí uno de los dos:
 
 ```bash
-openspec integrations watch
+openspec integrations watch      # una terminal aparte, andando todo el tiempo
 ```
+
+...o el hook de la sección 6.2, que no deja nada corriendo y sincroniza en el
+momento exacto en que el agente tilda.
 
 Y a laburar:
 
 1. Creás el change (`openspec new`, o el agente lo scaffoldea) →
    **aparece `feature/<change-id>` y quedás parado ahí.**
-2. Escribís código, el agente tilda tareas en `tasks.md` →
+2. Escribís código, el agente tilda tareas en `tasks.md` (por ejemplo con
+   `opsx:apply`) →
    **commit por pase**, y el card de Trello se mueve solo.
 3. `openspec archive <change-id>` →
    **commit del archivado, push, y PR contra develop**, con el link colgado del
