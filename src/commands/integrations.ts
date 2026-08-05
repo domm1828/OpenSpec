@@ -19,6 +19,7 @@ import {
   type SecretName,
 } from '../integrations/secrets.js';
 import {
+  disposeAll,
   healthcheckAll,
   loadAdapters,
   registerAdapter,
@@ -28,6 +29,7 @@ import {
 import {
   DEFAULT_WATCH_INTERVAL_MS,
   primeWatchSnapshot,
+  runWatchPass,
   startWatcher,
 } from '../integrations/watcher.js';
 import { resolveRootForCommand } from '../core/root-selection.js';
@@ -83,7 +85,7 @@ function fail(message: string, fix?: string): void {
 function registerIntegrationsGroup(program: Command): void {
   const group = program
     .command('integrations')
-    .description('Manage Telegram/Trello integrations');
+    .description('Manage Telegram/Trello/GitHub integrations');
 
   group
     .command('list')
@@ -198,6 +200,60 @@ function registerIntegrationsGroup(program: Command): void {
       for (const row of rows) {
         console.log(`  ${row.set ? '●' : '○'} ${row.name}${row.preview ? ` = ${row.preview}` : ' (unset)'}`);
       }
+    });
+
+  group
+    .command('sync')
+    .description('Run a single watch pass and exit, forwarding whatever moved')
+    .option('--json', 'Output as JSON')
+    .option('--quiet', 'Say nothing unless something went wrong')
+    .action(async (options: { json?: boolean; quiet?: boolean }) => {
+      const projectRoot = await resolveProjectRoot({});
+      if (!projectRoot) return;
+
+      const silent = options.json || options.quiet;
+      const note = (message: string): void => {
+        if (!silent) console.log(message);
+      };
+
+      const loaded = await loadAdapters({ projectRoot, log: (m) => console.error(m) });
+      const adapters = usableAdapters(loaded);
+
+      for (const entry of loaded) {
+        if (entry.initError) {
+          console.error(`Skipping ${entry.adapter.id}: ${entry.initError.message}`);
+        }
+      }
+
+      if (adapters.length === 0) {
+        if (options.json) printJson({ events: [], integrations: [] });
+        else note('No integrations are enabled. Try: openspec integrations enable trello');
+        // Deliberately not an error. This command is meant to be wired into an
+        // editor hook that fires on every edit, and a project with the
+        // integrations off must not turn that into a red mark on every save.
+        return;
+      }
+
+      // `start()` is skipped on purpose: it begins Telegram's polling loop, and
+      // a one-shot command that never returned would be a hook that hangs.
+      const events = await runWatchPass({
+        projectRoot,
+        adapters,
+        log: (m) => console.error(m),
+      });
+
+      if (options.json) {
+        printJson({
+          events: events.map((event) => ({ type: event.type, changeId: event.changeId })),
+          integrations: adapters.map((entry) => entry.adapter.id),
+        });
+      } else if (events.length === 0) {
+        note('Nothing moved.');
+      } else {
+        for (const event of events) note(`  ${event.type} ${event.changeId ?? ''}`);
+      }
+
+      await disposeAll(loaded);
     });
 
   group

@@ -767,7 +767,7 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
   },
   {
     name: 'integrations',
-    description: 'Manage Telegram/Trello integrations',
+    description: 'Manage Telegram/Trello/GitHub integrations',
     flags: [],
     subcommands: [
       {
@@ -811,6 +811,14 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
             description: 'Show which credentials are set (values are masked)',
             flags: [COMMON_FLAGS.json],
           },
+        ],
+      },
+      {
+        name: 'sync',
+        description: 'Run a single watch pass and exit, forwarding whatever moved',
+        flags: [
+          COMMON_FLAGS.json,
+          { name: 'quiet', description: 'Say nothing unless something went wrong' },
         ],
       },
       {
